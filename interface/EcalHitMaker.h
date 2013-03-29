@@ -36,7 +36,8 @@ class EcalHitMaker: public CaloHitMaker
 	       int onEcal,
 	       unsigned size,
 	       unsigned showertype,
-	       const RandomEngine* engine);
+	       const RandomEngine* engine,
+	       bool bGenericAlgorithm = false);
 
   ~EcalHitMaker();
 
@@ -112,7 +113,8 @@ class EcalHitMaker: public CaloHitMaker
    
   bool addHit(double r,double phi,unsigned layer=0) ;
 
-  unsigned fastInsideCell(const CLHEP::Hep2Vector & point,double & sp,bool debug=false) ;
+  unsigned fastInsideCell(const CLHEP::Hep2Vector & point,double & sp, bool debug=false) ;
+  unsigned fastInsideCell(const CLHEP::Hep2Vector & point,double & sp, double depth, bool debug=false) ;
 
   inline void setSpotEnergy(double e) { spotEnergy=e;}
   
@@ -153,6 +155,9 @@ class EcalHitMaker: public CaloHitMaker
  void hcalCellLine(std::vector<CaloPoint>& cp) const;
 
  void ecalCellLine(const XYZPoint&, const XYZPoint&,std::vector<CaloPoint>& cp); 
+
+ void ecalCellLineSlow(const XYZPoint&, const XYZPoint&,std::vector<CaloPoint>& cp); 
+
 
  void buildSegments(const std::vector<CaloPoint>& cp);
 
@@ -235,6 +240,8 @@ class EcalHitMaker: public CaloHitMaker
 
   std::vector<DetId> CellsWindow_;
   std::vector<Crystal> regionOfInterest_;
+  std::vector<int> regionOfInterestSubDet_;
+  std::vector<Crystal> regionOfInterestSorted_;
   std::vector<float> hits_;
   // Validity of the pads. To be valid, the intersection of the crytal with the plane should have 4 corners
   std::vector<bool> validPads_;
@@ -300,8 +307,12 @@ class EcalHitMaker: public CaloHitMaker
   std::vector<CLHEP::Hep2Vector> mycorners;
   std::vector<XYZPoint> corners;
 
-
   const RandomEngine* random;
+
+
+  // The ECAL algorithm is optimised for 2D. In case when a 3D calorimeter have to be simulated
+  // this have to be changed.
+  bool bGenericAlgorithm_;
 
 
 #ifdef FAMOSDEBUG

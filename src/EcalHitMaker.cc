@@ -1,7 +1,7 @@
 #include "DataFormats/DetId/interface/DetId.h"
 #include "DataFormats/EcalDetId/interface/EcalSubdetector.h"
-//#include "DataFormats/EcalDetId/interface/EBDetId.h"
-//#include "DataFormats/EcalDetId/interface/EEDetId.h"
+#include "DataFormats/EcalDetId/interface/EBDetId.h"
+#include "DataFormats/EcalDetId/interface/EEDetId.h"
 
 //#include "Geometry/EcalAlgo/interface/EcalBarrelGeometry.h"
 //#include "Geometry/EcalAlgo/interface/EcalEndcapGeometry.h"
@@ -33,13 +33,17 @@ EcalHitMaker::EcalHitMaker(CaloGeometryHelper * theCalo,
 			   const XYZPoint& ecalentrance, 
 			   const DetId& cell, int onEcal,
 			   unsigned size, unsigned showertype,
-			   const RandomEngine* engine):
+			   const RandomEngine* engine,
+			   bool bGenericAlgorithm):
   CaloHitMaker(theCalo,DetId::Ecal,((onEcal==1)?EcalBarrel:EcalEndcap),onEcal,showertype),
   EcalEntrance_(ecalentrance),
   onEcal_(onEcal),
   myTrack_(NULL),
-  random(engine)
+  random(engine),
+  bGenericAlgorithm_(bGenericAlgorithm)
 {
+
+
 #ifdef FAMOSDEBUG
   myHistos = Histos::instance();
 #endif
@@ -77,7 +81,7 @@ EcalHitMaker::EcalHitMaker(CaloGeometryHelper * theCalo,
     pivot_=Crystal();
   central_=onEcal==1;
   ecalFirstSegment_=-1;
-  
+
   myCrystalWindowMap_ = 0; 
   // In some cases, a "dummy" grid, not based on a cell, can be built. The previous variables
   // should however be initialized. In such a case onEcal=0
@@ -89,17 +93,17 @@ EcalHitMaker::EcalHitMaker(CaloGeometryHelper * theCalo,
 
   // Build the grid
   // The result is put in CellsWindow and is ordered by distance to the pivot
-  myCalorimeter->getWindow(pivot_.getDetId(),size,size,CellsWindow_);
+  myCalorimeter->getWindow(pivot_.getDetId(),size,size,CellsWindow_,bGenericAlgorithm_);
 
   buildGeometry();
-  //  std::cout << " Geometry built " << regionOfInterest_.size() << std::endl;
+  //  std::cout << " Geometry built " << regionOfInterest_.size() << " Cells window size " <<CellsWindow_.size() << std::endl;
 
   truncatedGrid_ = CellsWindow_.size()!=(etasize_*phisize_);
-
+  //  std::cout << " Cells window size " <<CellsWindow_.size() << std::endl;
   // A local vector of corners
   mycorners.resize(4);
   corners.resize(4);
-  
+
 #ifdef DEBUGGW
   myHistos->fill("h10",EcalEntrance_.eta(),CellsWindow_.size());
   if(onEcal==2) 
@@ -140,22 +144,18 @@ EcalHitMaker::addHitDepth(double r,double phi,double depth)
   r*=radiusFactor_;
   CLHEP::Hep2Vector point(r*std::cos(phi),r*std::sin(phi));
 
-  unsigned xtal=fastInsideCell(point,sp);  
-  //  if(cellid.isZero()) std::cout << " cell is Zero " << std::endl;
-//  if(xtal<1000) 
-//    {
-//      std::cout << "Result " << regionOfInterest_[xtal].getX0Back() << " " ;
-//      std::cout << depth << std::endl;
-//    }
-//  myHistos->fill("h5000",depth);
+  unsigned xtal= 0;
+
+  if (!bGenericAlgorithm_) xtal = fastInsideCell(point,sp);  
+  else xtal = fastInsideCell(point,sp, depth); 
+
   if(xtal<1000)
     {
-      //      myHistos->fill("h5002",regionOfInterest_[xtal].getX0Back(),depth);
-      //      myHistos->fill("h5003",ecalentrance_.eta(),maxX0_);
       if(regionOfInterest_[xtal].getX0Back()>depth) 
 	{
-	  hits_[xtal]+=spotEnergy;	
-	  //	  myHistos->fill("h5005",r);
+
+	  if (fabs(sp-1.0) < 1e-5) hits_[xtal]+= spotEnergy;	
+	  else hits_[xtal]+= (random->flatShoot()<sp)*spotEnergy;
 	  return true;
 	}
       else
@@ -176,25 +176,11 @@ EcalHitMaker::addHitDepth(double r,double phi,double depth)
 }
 
 
-//bool EcalHitMaker::addHitDepth(double r,double phi,double depth)
-//{
-//  std::map<unsigned,float>::iterator itcheck=hitMap_.find(pivot_.getDetId().rawId());
-//  if(itcheck==hitMap_.end())
-//    {
-//      hitMap_.insert(std::pair<uint32_t,float>(pivot_.getDetId().rawId(),spotEnergy));
-//    }
-//  else
-//    {
-//      itcheck->second+=spotEnergy;
-//    }
-//  return true;
-//}
 
 bool 
 EcalHitMaker::addHit(double r,double phi,unsigned layer)
 {
-  //  std::cout <<" Addhit " << std::endl;
-  //  std::cout << " Before insideCell " << std::endl;
+
   double sp(1.);
   //  std::cout << " Trying to add " << r << " " << phi << " " << radiusFactor_ << std::endl; 
   r*=radiusFactor_;
@@ -213,101 +199,60 @@ EcalHitMaker::addHit(double r,double phi,unsigned layer)
     }
 
   outsideWindowEnergy_+=spotEnergy;
-//  std::cout << " This hit ; r= " << point << " hasn't been added "<<std::endl;
-//  std::cout << " Xtal " << xtal << std::endl;
-//  for(unsigned ip=0;ip<npadsatdepth_;++ip)
-//    {
-//      std::cout << padsatdepth_[ip] << std::endl;
-//    }
   
   return false;
 }
 
-// Temporary solution
-//bool EcalHitMaker::addHit(double r,double phi,unsigned layer)
-//{
-//  std::map<unsigned,float>::iterator itcheck=hitMap_.find(pivot_.getDetId().rawId());
-//  if(itcheck==hitMap_.end())
-//    {
-//      hitMap_.insert(std::pair<uint32_t,float>(pivot_.getDetId().rawId(),spotEnergy));
-//    }
-//  else
-//    {
-//      itcheck->second+=spotEnergy;
-//    }
-//  return true;
-//}
-
 
 unsigned 
-EcalHitMaker::fastInsideCell(const CLHEP::Hep2Vector & point,double & sp,bool debug) 
+EcalHitMaker::fastInsideCell(const CLHEP::Hep2Vector & point,double & sp, bool debug) 
 {
 
-  //  debug = true;
+  debug = false;
   bool found=false;
   unsigned niter=0;
   // something clever has to be implemented here
   unsigned d1,d2;
   convertIntegerCoordinates(point.x(),point.y(),d1,d2);
-  //  std::cout << "Fastinside cell " << point.x() << " " <<  point.y() << " " << d1 << " "<< d2 << " " << nx_ << " " << ny_ << std::endl;
+
   if(d1>=nx_||d2>=ny_) 
     {
-      //      std::cout << " Not in the map " <<std::endl;
       return 9999;
     }
   unsigned cell=myCrystalNumberArray_[d1][d2];
   // We are likely to be lucky
-  //  std::cout << " Got the cell " << cell << std::endl;
   if (validPads_[cell]&&padsatdepth_[cell].inside(point)) 
     {
-      //      std::cout << " We are lucky " << cell << std::endl;
       sp = padsatdepth_[cell].survivalProbability();
       return cell;
     }
   
-  //  std::cout << "Starting the loop " << std::endl;
   bool status(true);
   const std::vector<unsigned>& localCellVector(myCrystalWindowMap_->getCrystalWindow(cell,status));
   if(status) 
     {
       unsigned size=localCellVector.size();      
-      //      std::cout << " Starting from " << EBDetId(regionOfInterest_[cell].getDetId()) << std::endl;
-      //      const std::vector<DetId>& neighbours=myCalorimeter->getNeighbours(regionOfInterest_[cell].getDetId());
-//      std::cout << " The neighbours are " << std::endl;
-//      for(unsigned ic=0;ic<neighbours.size(); ++ic)
-//	{
-//	  std::cout << EBDetId(neighbours[ic]) << std::endl;
-//	}
-//      std::cout << " Done " << std::endl;
+
       for(unsigned ic=0;ic<8&&ic<size;++ic)
 	{
 	  unsigned iq=localCellVector[ic];
-//	  std::cout << " Testing " << EBDetId(regionOfInterest_[iq].getDetId()) << std::endl; ; 
-//	  std::cout << " " << iq << std::endl;
-//	  std::cout << padsatdepth_[iq] ;
+
 	  if(validPads_[iq]&&padsatdepth_[iq].inside(point))
 	    {
-	      //	      std::cout << " Yes " << std::endl;
-	      //	      myHistos->fill("h1000",niter);
+
 	      sp = padsatdepth_[iq].survivalProbability();
-	      //	      std::cout << "Finished the loop " << niter << std::endl;
-	      //	      std::cout << "Inside " << std::endl;
 	      return iq;
 	    }
-	  //	  std::cout << " Not inside " << std::endl;
-	  //	  std::cout << "No " << std::endl;
 	  ++niter;
 	}
           }
   if(debug) std::cout << " not found in a quad, let's check the " << ncrackpadsatdepth_ << " cracks " << std::endl;
-  //  std::cout << "Finished the loop " << niter << std::endl;
   // Let's check the cracks 
   //  std::cout << " Let's check the cracks " << ncrackpadsatdepth_ << " " << crackpadsatdepth_.size() << std::endl;
   unsigned iquad=0;
   unsigned iquadinside=999;
   while(iquad<ncrackpadsatdepth_&&!found)
     {
-      //      std::cout << " Inside the while " << std::endl;
       if(crackpadsatdepth_[iquad].inside(point)) 
 	{
 	  iquadinside=iquad;
@@ -317,10 +262,94 @@ EcalHitMaker::fastInsideCell(const CLHEP::Hep2Vector & point,double & sp,bool de
       ++iquad;
       ++niter;
     }
-  //  myHistos->fill("h1002",niter);
   if(!found&&debug) std::cout << " Not found in the cracks " << std::endl;
   return (found) ? crackpadsatdepth_[iquadinside].getNumber(): 9999;
 }
+
+
+
+
+unsigned 
+EcalHitMaker::fastInsideCell(const CLHEP::Hep2Vector & point,double & sp, double depth, bool debug) 
+{
+
+  debug = false;
+  bool found=false;
+  unsigned niter=0;
+  // something clever has to be implemented here
+  unsigned d1,d2;
+  convertIntegerCoordinates(point.x(),point.y(),d1,d2);
+
+  if(d1>=nx_||d2>=ny_) 
+    {
+      //     std::cout << " Not in the map x = " << point.x() << " y  = " << point.y() <<std::endl;
+      return 9999;
+    }
+
+  double minX0 = 9999.;
+  unsigned cellToReturn = 9999;
+
+  bool status(true);
+  if(status) 
+    {
+      //      std::cout << " Starting from " << EBDetId(regionOfInterest_[cell].getDetId()) << std::endl;
+      //      const std::vector<DetId>& neighbours=myCalorimeter->getNeighbours(regionOfInterest_[cell].getDetId());
+//      std::cout << " The neighbours are " << std::endl;
+//      for(unsigned ic=0;ic<neighbours.size(); ++ic)
+//	{
+//	  std::cout << EBDetId(neighbours[ic]) << std::endl;
+//	}
+
+      for(unsigned ic=0;ic<regionOfInterest_.size();++ic) {
+
+	unsigned iq = ic;
+
+	//	padsatdepth_[iq].print();
+
+	  if(validPads_[iq]&&padsatdepth_[iq].inside(point))
+	    {
+
+	      if (regionOfInterest_[iq].getX0Back() > depth && regionOfInterest_[iq].getX0Back() < minX0) {	      	  
+	      
+		minX0 = regionOfInterest_[iq].getX0Back();
+		cellToReturn = iq;
+		sp = padsatdepth_[iq].survivalProbability();
+
+	      }
+	      
+	    }
+	  ++niter;
+      }
+
+      if (cellToReturn < 9000) return cellToReturn;
+
+    }
+  if (debug) std::cout << " not found in a quad, let's check the " << ncrackpadsatdepth_ << " cracks " << std::endl;
+  // Let's check the cracks 
+  unsigned iquad=0;
+  unsigned iquadinside=999;
+  while(iquad<ncrackpadsatdepth_&&!found)
+    {
+      //      std::cout << " ------------------------------------------- Inside the while for iquad number = " << crackpadsatdepth_[iquad].getNumber() << std::endl;
+      if(crackpadsatdepth_[iquad].inside(point)) 
+	{
+	  iquadinside=iquad;
+	  found=true;
+	  sp = crackpadsatdepth_[iquad].survivalProbability();
+	  if (debug) std::cout << "ended in crack " << iquad << " sp = " << sp << std::endl;
+	}
+      ++iquad;
+      ++niter;
+    }
+
+  if(!found&&debug) std::cout << " Not found in the cracks " << std::endl;
+  return (found) ? crackpadsatdepth_[iquadinside].getNumber(): 9999;
+}
+
+
+
+
+
 
 
 void 
@@ -328,8 +357,6 @@ EcalHitMaker::setTrackParameters(const XYZNormal& normal,
 				 double X0depthoffset,
 				 const FSimTrack& theTrack)
 {
-  //  myHistos->debug("setTrackParameters");
-  //  std::cout << " Track " << theTrack << std::endl;
   intersections_.clear();
   // This is certainly enough
   intersections_.reserve(50);
@@ -338,11 +365,6 @@ EcalHitMaker::setTrackParameters(const XYZNormal& normal,
   X0depthoffset_=X0depthoffset;
   cellLine(intersections_);
   buildSegments(intersections_);
-//  std::cout << " Segments " << segments_.size() << std::endl;
-//  for(unsigned ii=0; ii<segments_.size() ; ++ii)
-//    {
-//      std::cout << segments_[ii] << std::endl;
-//    }
 
 
   // This is only needed in case of electromagnetic showers 
@@ -390,19 +412,9 @@ EcalHitMaker::setTrackParameters(const XYZNormal& normal,
 		      regionOfInterest_[ic].setX0Back(x0);
 		    }
 		}
-	      //  myHistos->fill("h4000",ecalentrance_.eta(), regionOfInterest_[ic].getX0Back());
-	      //}
-	      //      else
-	      //{
-	      //   // in this case, we won't have any problem. No need to 
-	      //  // calculate the real depth. 
-	      //  regionOfInterest_[ic].setX0Back(9999);
-	      //}
 	    }//EMSHOWER  
 	} // ndir
-      //      myHistos->fill("h6000",segments_[ecalFirstSegment_].entrance().eta(),maxX0_);
     }
-  //  std::cout << "Leaving setTrackParameters" << std::endl
 }
 
 
@@ -413,7 +425,8 @@ EcalHitMaker::cellLine(std::vector<CaloPoint>& cp)
   //  if(myTrack->onVFcal()!=2)
   //    {
   if(!central_&&onEcal_&&simulatePreshower_) preshowerCellLine(cp);
-  if(onEcal_)ecalCellLine(EcalEntrance_,EcalEntrance_+normal_,cp);
+  if(onEcal_ && !bGenericAlgorithm_) ecalCellLine(EcalEntrance_,EcalEntrance_+normal_,cp);
+  if(onEcal_ && bGenericAlgorithm_) ecalCellLineSlow(EcalEntrance_,EcalEntrance_+normal_,cp);
   //    }
   
   XYZPoint vertex(myTrack_->vertex().position().Vect());
@@ -459,13 +472,6 @@ EcalHitMaker::cellLine(std::vector<CaloPoint>& cp)
   // with the N.I it is actually a source of problems
   hcalCellLine(cp);
 
-//  std::cout << " Intersections ordered by distance to " << vertex << std::endl;
-//
-//  for (unsigned ic=0;ic<cp.size();++ic)
-//    {
-//      XYZVector t=cp[ic]-vertex;
-//      std::cout << cp[ic] << " " << t.mag() << std::endl;
-//    }
 }
 
 
@@ -597,10 +603,9 @@ EcalHitMaker::ecalCellLine(const XYZPoint& a,const XYZPoint& b,std::vector<CaloP
   
   while(ic<ncrystals_&&(ic<highlim||!exitfound))
     {
-      // Check front side
-      //      if(!entrancefound)
+
 	{
-	  const Plane3D& plan=regionOfInterest_[ic].getFrontPlane();
+	  const Plane3D& plan = regionOfInterest_[ic].getFrontPlane();
 //	  XYZVector axis1=(plan.Normal());
 //	  XYZVector axis2=regionOfInterest_[ic].getFirstEdge();
 	  xp=intersect(plan,a,b,t,false);
@@ -657,6 +662,171 @@ EcalHitMaker::ecalCellLine(const XYZPoint& a,const XYZPoint& b,std::vector<CaloP
       ++ic;
     }    
 }
+
+
+
+
+void 
+EcalHitMaker::ecalCellLineSlow(const XYZPoint& a,const XYZPoint& b,std::vector<CaloPoint>& cp) 
+{
+  std::vector<XYZPoint> corners;
+  corners.resize(4);
+  unsigned ic=0;
+  double t;
+  XYZPoint xp;
+  DetId c_entrance,c_exit;
+
+  // try to determine the number of crystals to test
+  // First determine the incident angle
+  double angle=std::acos(normal_.Dot(regionOfInterest_[0].getAxis().Unit()));
+
+  double backdistance=std::sqrt(regionOfInterest_[0].getAxis().mag2())*std::tan(angle);
+  // 1/2.2cm = 0.45
+//   std::cout << " Angle " << angle << std::endl;
+//   std::cout << " Back distance " << backdistance << std::endl;
+  unsigned ncrystals=(unsigned)(backdistance*0.45);
+  unsigned highlim=(ncrystals+4);
+  highlim*=highlim;
+  if(highlim>ncrystals_) highlim=ncrystals_;
+
+  highlim = ncrystals_;
+
+  for (unsigned int i = 0; i < regionOfInterest_.size(); i++){
+    if (regionOfInterestSubDet_[i]==EcalBarrel)
+      regionOfInterestSorted_.push_back(regionOfInterest_[i]);
+  }
+
+  for (unsigned int i = 0; i < regionOfInterest_.size(); i++){
+    if (regionOfInterestSubDet_[i]==EcalEndcap)
+      if (abs(EEDetId(regionOfInterest_[i].getDetId()).zside()) == 1) regionOfInterestSorted_.push_back(regionOfInterest_[i]);
+  }
+
+  for (unsigned int i = 0; i < regionOfInterest_.size(); i++){
+    if (regionOfInterestSubDet_[i]==EcalEndcap)
+      if (abs(EEDetId(regionOfInterest_[i].getDetId()).zside()) == 2) regionOfInterestSorted_.push_back(regionOfInterest_[i]);
+  }
+  //  for (unsigned int i = 0; i < regionOfInterestSorted_.size(); i++){
+    
+
+  //  std::cout << "Size = " << regionOfInterestSorted_.size() << std::endl;
+
+
+
+    //    std::cout << "Print this out region of interest " << i << " zside = " << EEDetId(regionOfInterestSorted_[i].getDetId()).zside() << " " << regionOfInterest_[i].getBackCenter() << std::endl;
+  //  }
+
+
+  while(ic<ncrystals_&&(ic<highlim))
+    {
+
+
+      {
+      const Plane3D& plan=regionOfInterestSorted_[ic].getFrontPlane();
+      xp=intersect(plan,a,b,t,false);
+      regionOfInterestSorted_[ic].getFrontSide(corners);
+
+// 	  std::cout << "ic = " << ic << " Entrance xp = " << xp.x() << " " << xp.y() << std::endl;
+// 	  std::cout << " corners[0] " << corners[0].x() << " " << corners[0].y() << std::endl;
+// 	  std::cout << " corners[1] " << corners[1].x() << " " << corners[1].y() << std::endl;
+// 	  std::cout << " corners[2] " << corners[2].x() << " " << corners[2].y() << std::endl;
+// 	  std::cout << " corners[3] " << corners[3].x() << " " << corners[3].y() << std::endl;
+
+
+      if(inside3D(corners,xp))
+	{
+	  cp.push_back(CaloPoint(regionOfInterestSorted_[ic].getDetId(),UP,xp));
+	  c_entrance=regionOfInterestSorted_[ic].getDetId();
+	}
+
+      }
+	
+
+	  /*
+	  std::cout << "ic = " << ic << " Exit xp = " << xp << std::endl;
+	  std::cout << " corners[0] " << corners[0] << std::endl;
+	  std::cout << " corners[1] " << corners[1] << std::endl;
+	  std::cout << " corners[2] " << corners[2] << std::endl;
+	  std::cout << " corners[3] " << corners[3] << std::endl;
+	  */
+      const Plane3D& plan=regionOfInterestSorted_[ic].getBackPlane();
+      xp=intersect(plan,a,b,t,false);
+      regionOfInterestSorted_[ic].getBackSide(corners);
+	
+      if(inside3D(corners,xp))
+	{
+	  cp.push_back(CaloPoint(regionOfInterestSorted_[ic].getDetId(),DOWN,xp));
+	  c_exit=regionOfInterestSorted_[ic].getDetId();
+
+	}
+    
+      for(unsigned iside=0;iside<4;++iside)
+	{
+	  const Plane3D& plan=regionOfInterestSorted_[ic].getLateralPlane(iside);
+	  xp=intersect(plan,a,b,t,false);
+	  regionOfInterestSorted_[ic].getLateralSide(iside,corners);
+	  /*
+	  std::cout << "ic = " << ic << " Side xp = " << xp << std::endl;
+	  std::cout << " corners[0] " << corners[0] << std::endl;
+	  std::cout << " corners[1] " << corners[1] << std::endl;
+	  std::cout << " corners[2] " << corners[2] << std::endl;
+	  std::cout << " corners[3] " << corners[3] << std::endl;
+	  */
+
+	  if(inside3D(corners,xp))
+	    {
+	      //	      std::cout << "side found " << ic << std::endl;
+	      cp.push_back(CaloPoint(regionOfInterestSorted_[ic].getDetId(),CaloDirectionOperations::Side(iside),xp)); 
+	      //	      std::cout << cp[cp.size()-1] << std::endl;
+	    }	  
+	}
+      ++ic;
+    } 
+
+  
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 void 
@@ -746,7 +916,7 @@ EcalHitMaker::buildSegments(const std::vector<CaloPoint>& cp)
 		  sL0+=gapsef.L0length();                                                                                          
 		  X0PS2EE_+=gapsef.X0length();                        
   		  L0PS2EE_+=gapsef.L0length();      
-		  //		  std::cout << " Created  a segment " << gapsef.length()<< " " << gapsef.X0length()<< std::endl;
+		  //std::cout << " Created  a segment " << gapsef.length()<< " " << gapsef.X0length()<< std::endl;
 		}	      
 	    }
 	  else
@@ -773,14 +943,14 @@ EcalHitMaker::buildSegments(const std::vector<CaloPoint>& cp)
 		{
 		  CaloSegment segment(cp[2*is],cp[2*is+1],s,sX0,sL0,CaloSegment::PbWO4,myCalorimeter);
 		 segments_.push_back(segment);
-		 // std::cout << " Added (2)" << segment << std::endl;
+		 //		 std::cout << " Added (2)" << segment << std::endl;
 		 s+=segment.length();
 		 sX0+=segment.X0length();
 		 sL0+=segment.L0length(); 
 		 X0ECAL_+=segment.X0length();
 		 L0ECAL_+=segment.L0length();
 		 ++ncrossedxtals;
-		 ++is; 
+		 ++is;
 		}
 	      else
 		{
@@ -802,7 +972,7 @@ EcalHitMaker::buildSegments(const std::vector<CaloPoint>& cp)
 		      sL0+=cracksegment.L0length();
 		      X0ECAL_+=cracksegment.X0length();
 		      L0ECAL_+=cracksegment.L0length();
-		      //   std::cout <<" Added(3) "<< cracksegment << std::endl;
+		      //		      std::cout <<" Added(3) "<< cracksegment << std::endl;
 		    }
 		  else
 		    {
@@ -815,6 +985,7 @@ EcalHitMaker::buildSegments(const std::vector<CaloPoint>& cp)
 		      sL0+=cracksegment.L0length();
 		      X0EHGAP_+=cracksegment.X0length();
 		      L0EHGAP_+=cracksegment.L0length();
+		      //		      std::cout <<" Added(4) HCAL/ECAL crack segment"<< cracksegment << std::endl;
 		    }
 		}
 	      continue;
@@ -886,6 +1057,7 @@ EcalHitMaker::buildGeometry()
   // This is fully correct in the barrel. 
   ny_= phisize_;
   nx_=ncrystals_/ny_;
+  //  if (bGenericAlgorithm_) nx_ = 2*nx_;
   std::vector<unsigned> empty;
   empty.resize(ny_,0);
   myCrystalNumberArray_.reserve((unsigned)nx_);
@@ -901,12 +1073,27 @@ EcalHitMaker::buildGeometry()
   for(unsigned ic=0;ic<ncrystals_;++ic)
     {
       myCalorimeter->buildCrystal(CellsWindow_[ic],regionOfInterest_[ic]);
+      
+
       regionOfInterest_[ic].setNumber(ic);
       DetIdMap_.insert(std::pair<DetId,unsigned>(CellsWindow_[ic],ic));     
     }
   
   // Computes the map of the neighbours
   myCrystalWindowMap_ = new CrystalWindowMap(myCalorimeter,regionOfInterest_);
+
+  XYZPoint xp;
+  unsigned int size = regionOfInterest_.size();
+  
+  regionOfInterestSubDet_.resize(size);
+  
+  for (unsigned int i = 0; i < size; i++){
+    CaloPoint cPoint(regionOfInterest_[i].getDetId(),UP,xp);
+    int iSubDet = cPoint.whichSubDetector();
+    regionOfInterestSubDet_[i] = iSubDet;
+    
+  }
+
 }
 
 
@@ -1039,8 +1226,10 @@ EcalHitMaker::getPads(double depth,bool inCm)
 	  // compute the intersection. 
 	  // Check that the intersection is in the [a,b] segment  if HADSHOWER
 	  // if EMSHOWER the intersection is calculated as if the crystals were infinite
-	  XYZPoint xx=(EMSHOWER)?intersect(plan_,a,b,dummyt,false):intersect(plan_,a,b,dummyt,true);
-	  
+	  XYZPoint xx;
+	  if (!bGenericAlgorithm_) xx =(EMSHOWER)?intersect(plan_,a,b,dummyt,false):intersect(plan_,a,b,dummyt,true);
+	  else xx= intersect(plan_,a,b,dummyt,false);
+
 	  if(dummyt>1) behindback=true;
 	  //	  std::cout << " Intersect " << il << " " << a << " " << b << " " << plan_ << " " << xx << std::endl;
 	  // check that the intersection actually exists 
@@ -1059,6 +1248,12 @@ EcalHitMaker::getPads(double depth,bool inCm)
 	  if(hasbeenpulled) padsatdepth_[ic].setSurvivalProbability(pulledPadProbability_);
 	  validPads_[ic]=true;
 	  ++nquads;	
+
+	  //	  std::cout << "You was created" << std::endl;
+	  //	  padsatdepth_[ic].print();
+	    
+	  
+	
 	  // In principle, this should be done after the quads reorganization. But it would cost one more loop
 	  //  quadsatdepth_[ic].extrems(locxmin,locxmax,locymin,locymax);
 	  //  if(locxmin<xmin_) xmin_=locxmin;
@@ -1088,11 +1283,20 @@ EcalHitMaker::getPads(double depth,bool inCm)
 
       if(EMSHOWER) padsatdepth_[ic].resetCorners();
 
+      //      std::cout << "EMSHOWER = " << EMSHOWER << " before ymin_ = " << ymin_ << " ymax_ = " << ymax_ << " center y = " << padsatdepth_[ic].center().y() << std::endl;  
+
       padsatdepth_[ic].extrems(locxmin,locxmax,locymin,locymax);
       if(locxmin<xmin_) xmin_=locxmin;
       if(locymin<ymin_) ymin_=locymin;
       if(locxmax>xmax_) xmax_=locxmax;
       if(locymax>ymax_) ymax_=locymax;
+
+      /*
+      std::cout << " after ymin_ = " << ymin_ << " ymax_ = " << ymax_ << std::endl;  
+      std::cout << " center x = " << padsatdepth_[ic].center().x() << " center y = " << padsatdepth_[ic].center().y() 
+		<< " locxmin = " << locxmin << " locxmax = " << locxmax 
+		<< " locymin = " << locymin << " locymax = " << locymax << std::endl;  
+      */
     }
   
   sizex_=(xmax_-xmin_)/nx_;
@@ -1139,6 +1343,10 @@ EcalHitMaker::configureGeometry()
 	      regionOfInterest_[ic].crystalNeighbour(idir).setStatus(-1);
 	      continue;
 	    }
+
+	  //	  std::cout << "layer of the new cell = " << EEDetId(newcell).zside() << std::endl;
+	  //	  std::cout << "layer of the old cell = " << EEDetId(regionOfInterest_[ic].getDetId()).zside() << std::endl;
+
 	  // Determine the number of this neighbour
 	  //	  std::cout << " The neighbour is " << newcell << std::endl;
 	  std::map<DetId,unsigned>::const_iterator niter(DetIdMap_.find(newcell));
@@ -1149,7 +1357,7 @@ EcalHitMaker::configureGeometry()
 	      continue;
 	    }
 	  // Now there is a neighbour	  
-	  //	  std::cout << " The neighbour is " << niter->second << " " << cellids_[niter->second] << std::endl;
+	  //	  std::cout << " The neighbour is " << niter->second << " " << std::endl;
 	  regionOfInterest_[ic].crystalNeighbour(idir).setNumber(niter->second);
 	  //	  std::cout << " Managed to set crystalNeighbour " << ic << " " << idir << std::endl;
 	  //	  std::cout << " Trying  " << niter->second << " " << oppdir << std::endl;
@@ -1199,7 +1407,10 @@ EcalHitMaker::prepareCrystalNumberArray()
     {
       if(!validPads_[iq]) continue;
       unsigned d1,d2;
+      //      std::cout << "x = " << padsatdepth_[iq].center().x() << " y = " << padsatdepth_[iq].center().y() << " xmin_ " << xmin_ << " xmax_ " << xmax_ << " ymin_ = " << ymin_ << " ymax_ = " << ymax_ << std::endl;
+      //      std::cout << "nx_ = " << nx_ << " ny_ = " << ny_ << std::endl;
       convertIntegerCoordinates(padsatdepth_[iq].center().x(),padsatdepth_[iq].center().y(),d1,d2);
+      //      std::cout << "iq = " << iq << "d1 = " << d1 << " d2 = " << d2 << std::endl;  
       myCrystalNumberArray_[d1][d2]=iq;
     }
 }
@@ -1263,13 +1474,23 @@ EcalHitMaker::reorganizePads()
 	      unsigned neighbourNumber=regionOfInterest_[iq].crystalNeighbour(iside).number();
 	      if(!validPads_[neighbourNumber]) continue;
 	      // there is a crack between 
+
+	      int idx = regionOfInterest_[iq].crystalNeighbour(iside).number();
+	     
+	      if (regionOfInterestSubDet_[iq] == EcalEndcap && regionOfInterestSubDet_[idx] == EcalEndcap){
+		int s1 = EEDetId(regionOfInterest_[iq].getDetId()).zside();
+		int s2 = EEDetId(regionOfInterest_[idx].getDetId()).zside();
+		if (s1 != s2) continue;
+	      }
+
 	      if(neighbourstatus==1)
 		{
-		  //		  std::cout << " 1 Crack : " << thisside << " " << cellids_[iq]<< " " << cellids_[neighbourNumber] << std::endl;
+		  //		  std::cout << " 1 Crack : " << thisside << std::endl;
 		  cracks[iq].push_back(neighbour(thisside,neighbourNumber));
 		} // else it is a gap 
 	      else
 		{
+		  //		  std::cout << "gap created" << std::endl;
 		  gaps.push_back(neighbour(thisside,neighbourNumber));
 		}
 	    }
